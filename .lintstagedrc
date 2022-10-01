@@ -1,0 +1,12 @@
+{
+  "*.{mjs,cjs,ts,tsx}": [
+    "prettier --write",
+    "next lint --max-warnings=0 --fix"
+  ],
+  "*.{md,json,yml}": [
+    "prettier --write"
+  ],
+  "*.prisma": [
+    "prisma format"
+  ]
+}

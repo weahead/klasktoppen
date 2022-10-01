@@ -1,0 +1,97 @@
+version: '3.9'
+
+volumes:
+  db:
+  traefik_conf:
+
+services:
+  cert:
+    image: weahead/mkcert:1.4.3
+    restart: 'no'
+    profiles:
+      - setup
+    entrypoint: /bin/sh
+    command:
+      - '-c'
+      - |
+        echo {tls: {stores: {default: {defaultCertificate: {certFile: /certs/klasktoppen.cert, keyFile: /certs/klasktoppen.key}}}}} > /traefik_conf/dynamic.yml
+        mkcert -key-file klasktoppen.key -cert-file klasktoppen.cert klasktoppen.weahead.me "*.klasktoppen.weahead.me"
+    environment:
+      CAROOT: /certs
+    working_dir: /certs
+    volumes:
+      - ~/.mkcert:/certs
+      - traefik_conf:/traefik_conf
+
+  proxy:
+    image: traefik:v2.6
+    restart: 'no'
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ~/.mkcert:/certs
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_conf:/traefik_conf
+    command:
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entryPoint.to=websecure
+      - --entrypoints.web.http.redirections.entryPoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.tls=true
+      - --api
+      - --providers.docker
+      - --providers.docker.exposedByDefault=false
+      - --providers.file.filename=/traefik_conf/dynamic.yml
+      # - --log.level=DEBUG
+    labels:
+      traefik.enable: true
+      traefik.http.routers.dashboard.rule: Host(`dashboard.klasktoppen.weahead.me`)
+      traefik.http.routers.dashboard.service: api@internal
+      traefik.http.routers.dashboard.entrypoints: websecure
+      traefik.http.routers.http-catchall.rule: hostregexp(`{host:.+}`)
+      traefik.http.routers.http-catchall.entrypoints: web
+
+  database:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: klasktoppen
+      POSTGRES_PASSWORD: klasktoppen
+      POSTGRES_DB: klasktoppen
+    restart: always
+    volumes:
+      - db:/var/lib/postgresql/data
+
+  app:
+    restart: unless-stopped
+    build:
+      target: develop
+      context: .
+    environment:
+      DATABASE_URL: postgresql://klasktoppen:klasktoppen@database:5432/klasktoppen?schema=data&connect_timeout=30&pool_timeout=30&socket_timeout=30
+    volumes:
+      - ./:/app/
+    depends_on:
+      - proxy
+      - database
+    labels:
+      traefik.enable: true
+      traefik.http.routers.app.rule: Host(`klasktoppen.weahead.me`)
+
+  studio:
+    restart: unless-stopped
+    build:
+      target: develop
+      context: .
+    command: ['-c', 'npm run studio']
+    environment:
+      DATABASE_URL: postgresql://klasktoppen:klasktoppen@database:5432/klasktoppen?schema=data&connect_timeout=30&pool_timeout=30&socket_timeout=30
+    volumes:
+      - ./:/app/
+    depends_on:
+      - proxy
+      - database
+    labels:
+      traefik.enable: true
+      traefik.http.routers.studio.rule: Host(`studio.klasktoppen.weahead.me`)
+      traefik.http.services.studio.loadbalancer.server.port: 5555
